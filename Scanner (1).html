@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Absensi Terpadu MTs PSM Loceret</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{--navy:#12345a;--blue:#1769aa;--bg:#f1f5f9;--green:#15803d;--red:#b91c1c}*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Arial,Helvetica,sans-serif;color:#172033}.wrap{max-width:560px;margin:0 auto;padding:18px}.head{background:linear-gradient(135deg,#12345a,#1769aa);color:white;border-radius:18px;padding:22px 18px;text-align:center;box-shadow:0 8px 22px #12345a22}.head h1{font-size:21px;margin:0 0 6px}.head p{margin:0;font-size:13px;opacity:.9}.panel{background:#fff;border-radius:16px;padding:16px;margin-top:15px;box-shadow:0 4px 15px #1720330c}.status{padding:13px;border-radius:10px;background:#eef2f7;color:#334155;font-size:14px;line-height:1.5;white-space:pre-line}.status.ok{background:#dcfce7;color:#166534}.status.err{background:#fee2e2;color:#991b1b}.status.wait{background:#dbeafe;color:#1d4ed8}#reader{width:100%;overflow:hidden;border-radius:12px}button{width:100%;border:0;border-radius:11px;padding:14px;font-size:16px;font-weight:700;cursor:pointer;margin-top:12px;background:var(--blue);color:#fff}button.secondary{background:#e2e8f0;color:#172033}button:disabled{opacity:.55;cursor:not-allowed}.hint{font-size:12px;color:#64748b;line-height:1.5;margin-top:10px}.result{display:none;margin-top:14px;border:1px solid #dbeafe;border-radius:12px;padding:14px}.result strong{display:block;font-size:18px;margin-bottom:5px}.tag{display:inline-block;padding:5px 9px;border-radius:30px;background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:bold;margin-top:8px}.foot{text-align:center;color:#64748b;font-size:11px;padding:18px}
+</style></head>
+<body><main class="wrap">
+<header class="head"><h1>ABSENSI TERPADU</h1><p>MTs PSM Loceret · Tahun Ajaran 2026/2027</p></header>
+<section class="panel"><div id="status" class="status">Tekan tombol MULAI SCAN untuk mengaktifkan kamera.</div><div id="reader" style="margin-top:14px"></div><button id="startBtn" onclick="mulaiScanner()">MULAI SCAN QR</button><button id="stopBtn" class="secondary" onclick="hentikanScanner()" style="display:none">HENTIKAN KAMERA</button><div class="hint">Kartu siswa lama dengan format <b>NIS:nomorinduk</b> tetap didukung. Siswa perlu mengizinkan akses kamera dan lokasi. Absensi siswa hanya dapat disimpan dalam radius sekolah; MASUK mulai 07.00 WIB dan PULANG mulai 13.00 WIB.</div></section>
+<section id="result" class="panel result"><strong id="namaHasil">—</strong><div id="detailHasil"></div><span id="tagHasil" class="tag">—</span><button onclick="scanBerikutnya()">SCAN BERIKUTNYA</button></section>
+<div class="foot">Sistem Absensi Terpadu · MTs PSM Loceret</div></main>
+<script>
+let scanner=null, sedangProses=false, kameraAktif=false;
+const $=id=>document.getElementById(id);
+function setStatus(msg,type=''){ $('status').className='status '+type; $('status').textContent=msg; }
+async function mulaiScanner(){
+ if(kameraAktif||sedangProses)return;
+ if(typeof Html5Qrcode==='undefined'){setStatus('Library pemindai QR gagal dimuat. Periksa koneksi internet lalu muat ulang halaman.','err');return;}
+ try{
+  $('startBtn').disabled=true;setStatus('Meminta izin kamera…','wait');
+  scanner=new Html5Qrcode('reader');
+  await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:250,height:250},aspectRatio:1.0},qrBerhasil,()=>{});
+  kameraAktif=true;$('startBtn').style.display='none';$('stopBtn').style.display='block';setStatus('Kamera aktif. Arahkan QR ke dalam kotak pemindai.','wait');
+ }catch(e){scanner=null;$('startBtn').disabled=false;setStatus('Kamera tidak dapat dibuka: '+(e&&e.message?e.message:String(e)),'err');}
+}
+async function hentikanScanner(){
+ if(scanner&&kameraAktif){try{await scanner.stop();}catch(e){}try{await scanner.clear();}catch(e){}}
+ scanner=null;kameraAktif=false;$('startBtn').style.display='block';$('startBtn').disabled=false;$('stopBtn').style.display='none';
+}
+async function qrBerhasil(teksQR){
+ if(sedangProses)return;
+ const qr=String(teksQR||'').trim();if(!qr)return;sedangProses=true;
+ try{if(scanner&&kameraAktif){await scanner.pause(true);}}catch(e){}
+ setStatus('QR terbaca. Memproses absensi…','wait');
+ const siswa=/^NIS:/i.test(qr)||/^\d+$/.test(qr);
+ if(siswa){
+  ambilGPSDanProsesSiswa(qr);
+ }else{
+  google.script.run.withSuccessHandler(hasil=>tampilkanHasil(hasil,'guru')).withFailureHandler(err=>tampilkanHasil({success:false,message:err&&err.message?err.message:'Gagal menghubungi server.'},'guru')).prosesScanGuruTerpadu(qr);
+ }
+}
+function ambilGPSDanProsesSiswa(qr){
+ if(!navigator.geolocation){tampilkanHasil({success:false,message:'Perangkat/browser tidak mendukung GPS.'},'siswa');return;}
+ setStatus('Memeriksa lokasi sekolah…','wait');
+ navigator.geolocation.getCurrentPosition(pos=>{
+  google.script.run.withSuccessHandler(hasil=>tampilkanHasil(hasil,'siswa')).withFailureHandler(err=>tampilkanHasil({success:false,message:err&&err.message?err.message:'Gagal menghubungi server.'},'siswa')).prosesScanSiswaTerpadu(qr,pos.coords.latitude,pos.coords.longitude);
+ },err=>{let pesan='Lokasi tidak dapat dibaca.';if(err.code===1)pesan='Izin lokasi ditolak. Izinkan akses lokasi di browser untuk absensi siswa.';else if(err.code===2)pesan='Sinyal lokasi belum tersedia. Aktifkan GPS lalu coba lagi.';else if(err.code===3)pesan='Permintaan GPS terlalu lama. Coba lagi.';tampilkanHasil({success:false,message:pesan},'siswa');},{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+}
+function tampilkanHasil(hasil,jenis){
+ hasil=hasil||{success:false,message:'Server tidak mengembalikan hasil.'};
+ $('result').style.display='block';$('namaHasil').textContent=hasil.nama||hasil.nis||hasil.idGuru||'Absensi tidak berhasil';
+ const detail=[];if(hasil.kelas)detail.push('Kelas: '+hasil.kelas);if(hasil.tanggal)detail.push('Tanggal: '+hasil.tanggal);if(hasil.jam)detail.push('Jam: '+hasil.jam);if(hasil.jarak!==undefined&&hasil.jarak!==null)detail.push('Jarak sekolah: '+hasil.jarak+' meter');detail.push(hasil.message||'');$('detailHasil').textContent=detail.join('\n');$('detailHasil').style.whiteSpace='pre-line';
+ $('tagHasil').textContent=hasil.success?((hasil.kegiatan||'BERHASIL')+' · '+(jenis==='guru'?'GURU':'SISWA')):'GAGAL';$('status').className='status '+(hasil.success?'ok':'err');$('status').textContent=hasil.success?'Absensi berhasil diproses.':(hasil.message||'Absensi gagal.');
+ if(scanner&&kameraAktif){scanner.stop().then(()=>scanner.clear()).catch(()=>{}).finally(()=>{scanner=null;kameraAktif=false;$('stopBtn').style.display='none';$('startBtn').style.display='block';$('startBtn').disabled=false;});}
+ else{$('startBtn').style.display='block';$('startBtn').disabled=false;$('stopBtn').style.display='none';}
+}
+async function scanBerikutnya(){ $('result').style.display='none';sedangProses=false;setStatus('Siap memindai QR berikutnya.','');await mulaiScanner(); }
+</script></body></html>
